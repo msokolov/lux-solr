@@ -2,9 +2,13 @@ package lux.solr.field;
 
 import java.util.Iterator;
 
+import lux.exception.LuxException;
+import lux.index.XmlIndexer;
 import lux.index.field.XPathField;
+import net.sf.saxon.s9api.SaxonApiException;
 import net.sf.saxon.s9api.XdmItem;
 import net.sf.saxon.s9api.XdmSequenceIterator;
+import net.sf.saxon.s9api.XdmValue;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Field.Store;
@@ -21,6 +25,17 @@ public class SolrXPathField extends XPathField {
 
     public SchemaField getSchemaField() {
         return schemaField;
+    }
+    
+    @Override
+    public Iterable<?> getValues(XmlIndexer indexer) {
+        XdmValue value;
+        try {
+            value = indexer.evaluateXPath (getXPath());
+        } catch (SaxonApiException e) {
+            throw new LuxException("error getting values for field: " + getName(), e);
+        }
+        return new SolrFieldValueIterator(value.iterator());
     }
     
     public class SolrFieldValueIterator implements Iterator<Object>, Iterable<Object> {

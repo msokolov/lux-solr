@@ -26,7 +26,9 @@ import lux.QueryStats;
 import lux.TransformErrorListener;
 import lux.exception.LuxException;
 import lux.exception.ResourceExhaustedException;
+import lux.query.parser.LuxSearchQueryParser;
 import lux.search.LuxSearcher;
+import lux.search.SolrSearchService;
 import lux.solr.LuxDispatchFilter.Request;
 import lux.xml.QName;
 import net.sf.saxon.Configuration;
@@ -281,8 +283,18 @@ public class XQueryComponent extends QueryComponent implements SolrCoreAware {
         LuxSearcher searcher = new LuxSearcher (rb.req.getSearcher());
         DocWriter docWriter = new SolrDocWriter(this, rb.req.getCore());
         Compiler compiler = solrIndexConfig.getCompiler();
-
-        Evaluator eval = new Evaluator(compiler, searcher, docWriter);
+        SolrQueryContext context = new SolrQueryContext(this, req);
+        if (rb.shards != null && rb.req.getParams().getBool("distrib", true)) {
+            // This is a distributed request; pass in the ResponseBuilder so it will be
+            // available to a subquery.
+            context.setResponseBuilder(rb);
+            // also capture the current set of shards
+            shards = rb.shards;
+            slices = rb.slices;
+        }
+        SolrSearchService searchService = new SolrSearchService(context, new LuxSearchQueryParser());
+        Evaluator eval = new Evaluator(compiler, searcher, docWriter, searchService);
+        // track which evaluator we are using in a threadlocal container
         evalHolder.set (eval);
         TransformErrorListener errorListener = eval.getErrorListener();
         try {
@@ -304,15 +316,6 @@ public class XQueryComponent extends QueryComponent implements SolrCoreAware {
         NamedList<Object> xpathResults = new NamedList<Object>();
         long tstart = System.currentTimeMillis();
         int count = 0;
-        SolrQueryContext context = new SolrQueryContext(this, req);
-        if (rb.shards != null && rb.req.getParams().getBool("distrib", true)) {
-            // This is a distributed request; pass in the ResponseBuilder so it will be
-            // available to a subquery.
-            context.setResponseBuilder(rb);
-            // also capture the current set of shards
-            shards = rb.shards;
-            slices = rb.slices;
-        }
         bindRequestVariables(rb, req, expr, compiler, eval, context);
         Iterator<XdmItem> queryResults = eval.iterator(expr, context);
         String err = null;

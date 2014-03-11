@@ -38,14 +38,14 @@ import org.apache.solr.search.SortSpec;
  */
 public class CloudSearchIterator extends SearchIteratorBase {
 
-    public enum QueryParser {
+    public enum QueryParserType {
         CLASSIC, XML
     }
     
     private int limit; // = solr 'rows'
     private SolrQueryResponse response;
     private final String query;
-    private final QueryParser queryParser;
+    private final QueryParserType queryParser;
     private final String xmlFieldName;
     private final String uriFieldName;
     private final String idFieldName;
@@ -59,7 +59,7 @@ public class CloudSearchIterator extends SearchIteratorBase {
      * @param sortCriteria the sort order for the results
      * @param start1 the 1-based start position at which to begin the iteration
      */
-    public CloudSearchIterator (Evaluator eval, String query, QueryParser queryParser, String[] sortCriteria, int start1) {
+    public CloudSearchIterator (Evaluator eval, String query, QueryParserType queryParser, String[] sortCriteria, int start1) {
         super (eval, sortCriteria, start1);
         this.limit = 20;
         this.queryParser = queryParser;
@@ -126,7 +126,7 @@ public class CloudSearchIterator extends SearchIteratorBase {
         ResponseBuilder origRB = ((SolrQueryContext)eval.getQueryContext()).getResponseBuilder();
         ModifiableSolrParams params = new ModifiableSolrParams();
         params.add((CommonParams.Q), query);
-        if (QueryParser.XML == queryParser) {
+        if (QueryParserType.XML == queryParser) {
             params.add("defType", "xml");
         }
         params.add(CommonParams.START, Integer.toString(position));

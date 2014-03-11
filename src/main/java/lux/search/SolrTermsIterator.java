@@ -85,7 +85,6 @@ class SolrTermsIterator implements SequenceIterator<AtomicValue> {
         params.add(TermsParams.TERMS_SORT, TermsParams.TERMS_SORT_INDEX);
         params.add(TermsParams.TERMS_LIMIT, Integer.toString(100));
         params.add("distrib", "true");
-        xqueryComponent.getCurrentShards();
         params.add(ShardParams.SHARDS, StringUtils.join(xqueryComponent.getCurrentShards(), ","));
         params.add(ShardParams.SHARDS_QT, "/terms"); // this gets passed to the shards to tell them what the request is
         SolrQueryRequest req = new CloudQueryRequest(xqueryComponent.getCore(), params, null);

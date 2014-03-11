@@ -3,9 +3,10 @@ package lux.search;
 import java.io.IOException;
 import java.util.Collection;
 
-import lux.Evaluator;
 import lux.index.field.FieldDefinition;
 import lux.query.parser.LuxSearchQueryParser;
+import lux.solr.CloudSearchIterator;
+import lux.solr.CloudSearchIterator.QueryParserType;
 import lux.solr.SolrQueryContext;
 import lux.solr.field.SolrXPathField;
 import net.sf.saxon.om.AtomicArray;
@@ -13,7 +14,7 @@ import net.sf.saxon.om.Item;
 import net.sf.saxon.om.LazySequence;
 import net.sf.saxon.om.NodeInfo;
 import net.sf.saxon.om.Sequence;
-import net.sf.saxon.om.SequenceIterator;
+import net.sf.saxon.s9api.XdmNode;
 import net.sf.saxon.trans.XPathException;
 import net.sf.saxon.value.EmptySequence;
 import net.sf.saxon.value.Int64Value;
@@ -23,36 +24,61 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.Term;
 import org.apache.solr.common.SolrDocument;
-import org.apache.solr.schema.SchemaField;
+import org.apache.solr.handler.component.ResponseBuilder;
+import org.apache.solr.schema.FieldType;
+import org.apache.solr.schema.IndexSchema;
 
-public class SolrSearchService implements SearchService {
+/**
+ * Performs distributed searches using SolrCloud, and also local search operations directly
+ * with the lucene index.
+ */
+public class SolrSearchService extends LuceneSearchService {
     
     private final SolrQueryContext context;
-    private final LuxSearchQueryParser parser;
-    private final Evaluator eval;
     
-    public SolrSearchService (SolrQueryContext context, LuxSearchQueryParser parser, Evaluator eval) {
+    public SolrSearchService (SolrQueryContext context, LuxSearchQueryParser parser) {
+        super(parser);
         this.context = context;
-        this.parser = parser;
-        this.eval = eval;
     }
     
     @Override
     public Sequence search(Item queryArg, String[] sortCriteria, int start) throws XPathException {
-        SequenceIterator<?> iterator = context.createSearchIterator(queryArg, parser, eval, sortCriteria, start);
-        return new LazySequence(iterator);
+        if (isDistributed()) {
+            return new LazySequence(doCloudSearch(queryArg, sortCriteria, start));
+        }
+        return super.search(queryArg, sortCriteria, start);
+    }
+
+    private boolean isDistributed() {
+        ResponseBuilder responseBuilder = context.getResponseBuilder();
+        return responseBuilder != null && responseBuilder.shards != null;
+    }
+    
+    private CloudSearchIterator doCloudSearch (Item queryArg, String[] sortCriteria, int start) {
+        // For cloud queries, we don't parse; just serialize the query and let the shard parse it
+        QueryParserType qp;
+        String qstr;
+        if (queryArg instanceof NodeInfo) {
+            qp = QueryParserType.XML;
+            // cheap-ass serialization
+            qstr = new XdmNode((NodeInfo)queryArg).toString();
+        } else {
+            qp = QueryParserType.CLASSIC;
+            qstr = queryArg.getStringValue();
+        }
+        return new CloudSearchIterator (getEvaluator(), qstr, qp, sortCriteria, start);
     }
 
     @Override
     public long count(Item queryArg) throws XPathException {
-        // TODO: convert queryArg to string directly or by serliazing node
-        // FIXME -- CloudSearchIterator implements count() but other iterators do not
-        return context.createSearchIterator(queryArg, parser, eval, null, 0).count();
+        if (isDistributed()) {
+            return doCloudSearch (queryArg, null, 0).count();
+        }
+        return super.count(queryArg);
     }
 
     @Override
     public Sequence key(FieldDefinition field, NodeInfo node) throws XPathException {
-        assert field.getType() == FieldDefinition.Type.SOLR_FIELD;
         SolrDocument solrDoc = (SolrDocument) node.getDocumentRoot().getUserData(SolrDocument.class.getName());
         if (solrDoc != null) {
             return getFieldValue (solrDoc, field);
@@ -66,15 +92,26 @@ public class SolrSearchService implements SearchService {
     
     private Sequence getFieldValue(Document doc, FieldDefinition field) {
         // TODO: convert Solr dates to xs:dateTime?  but the user can manage that, perhaps, for now
-        SchemaField schemaField = ((SolrXPathField)field).getSchemaField();
-        IndexableField [] fieldValues = doc.getFields(field.getName());
+        IndexSchema schema = context.getQueryComponent().getSolrIndexConfig().getSchema();
+        String fieldName = field.getName();
+        IndexableField [] fieldValues = doc.getFields(fieldName);
         StringValue[] valueItems = new StringValue[fieldValues.length];
+        FieldType fieldType = getFieldType(field, schema);
         for (int i = 0; i < fieldValues.length; i++) {
-            valueItems[i] = StringValue.makeStringValue(schemaField.getType().toExternal(fieldValues[i]));
+            valueItems[i] = StringValue.makeStringValue(fieldType.toExternal(fieldValues[i]));
         }
         return new AtomicArray(valueItems);        
     }
     
+    private FieldType getFieldType(FieldDefinition field, IndexSchema schema) {
+        switch (field.getType()) {
+        case SOLR_FIELD: 
+            return ((SolrXPathField)field).getSchemaField().getType();
+        default:
+            return  schema.getFieldType(field.getName());
+        }
+    }
+
     // Get field values from a SolrDocument; used for distributed queries.  In this case the document
     // will have resulted from a query to a remote Solr instance
     private Sequence getFieldValue (SolrDocument doc, FieldDefinition field) throws XPathException {
@@ -111,14 +148,13 @@ public class SolrSearchService implements SearchService {
     @Override
     public Sequence terms(String fieldName, String startValue) throws XPathException {
         Term term = new Term(fieldName, startValue);
-        lux.solr.XQueryComponent xqueryComponent = context.getQueryComponent();
-        if (xqueryComponent.getCurrentShards() != null) {
+        if (isDistributed()) {
             // distributed query
-            return new LazySequence (new SolrTermsIterator(eval, term));
+            return new LazySequence (new SolrTermsIterator(getEvaluator(), term));
         }
         // access local index
         try {
-            return new LazySequence(new TermsIterator(eval, term));
+            return new LazySequence(new TermsIterator(getEvaluator(), term));
         } catch (IOException e) {
             throw new XPathException(e);
         }        
